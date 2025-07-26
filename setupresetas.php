@@ -1,7 +1,7 @@
 <?php
 /**
- * INSTALADOR AUTOMÁTICO - Sistema de Recetas
- * Este archivo descarga e instala todo el sistema completo
+ * INSTALADOR AUTOMÁTICO - Sistema de Recetas JSON
+ * Versión actualizada para repositorio con archivos ya modificados
  */
 
 // Verificar si ya está instalado
@@ -52,481 +52,12 @@ function downloadFromGitHub($file, $localPath) {
     return file_put_contents($localPath, $content);
 }
 
-// Función para crear el archivo de configuración JSON
-function createJsonConfig() {
-    return '<?php
-class JsonDatabase {
-    private $dataPath;
-    private $files = [
-        "users" => "users.json",
-        "recipes" => "recipes.json",
-        "categories" => "categories.json"
-    ];
-    
-    public function __construct() {
-        $this->dataPath = dirname(__DIR__) . "/data/";
-        $this->ensureDataDirectory();
-    }
-    
-    private function ensureDataDirectory() {
-        if (!file_exists($this->dataPath)) {
-            mkdir($this->dataPath, 0777, true);
-        }
-    }
-    
-    private function getFilePath($collection) {
-        return $this->dataPath . $this->files[$collection];
-    }
-    
-    private function readData($collection) {
-        $filePath = $this->getFilePath($collection);
-        
-        if (!file_exists($filePath)) {
-            return ["next_id" => 1, $collection => []];
-        }
-        
-        $json = file_get_contents($filePath);
-        return json_decode($json, true);
-    }
-    
-    private function writeData($collection, $data) {
-        $filePath = $this->getFilePath($collection);
-        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-        return file_put_contents($filePath, $json);
-    }
-    
-    public function getAll($collection) {
-        $data = $this->readData($collection);
-        return $data[$collection] ?? [];
-    }
-    
-    public function getById($collection, $id) {
-        $items = $this->getAll($collection);
-        foreach ($items as $item) {
-            if ($item["id"] == $id) {
-                return $item;
-            }
-        }
-        return null;
-    }
-    
-    public function findBy($collection, $field, $value) {
-        $items = $this->getAll($collection);
-        $results = [];
-        foreach ($items as $item) {
-            if (isset($item[$field]) && $item[$field] == $value) {
-                $results[] = $item;
-            }
-        }
-        return $results;
-    }
-    
-    public function findOneBy($collection, $field, $value) {
-        $results = $this->findBy($collection, $field, $value);
-        return !empty($results) ? $results[0] : null;
-    }
-    
-    public function insert($collection, $item) {
-        $data = $this->readData($collection);
-        $item["id"] = $data["next_id"];
-        $item["created_at"] = date("Y-m-d H:i:s");
-        $data[$collection][] = $item;
-        $data["next_id"]++;
-        $this->writeData($collection, $data);
-        return $item;
-    }
-    
-    public function update($collection, $id, $updates) {
-        $data = $this->readData($collection);
-        $items = &$data[$collection];
-        
-        foreach ($items as &$item) {
-            if ($item["id"] == $id) {
-                $item = array_merge($item, $updates);
-                $item["updated_at"] = date("Y-m-d H:i:s");
-                $this->writeData($collection, $data);
-                return $item;
-            }
-        }
-        return null;
-    }
-    
-    public function delete($collection, $id) {
-        $data = $this->readData($collection);
-        $items = &$data[$collection];
-        
-        foreach ($items as $key => $item) {
-            if ($item["id"] == $id) {
-                unset($items[$key]);
-                $data[$collection] = array_values($items);
-                $this->writeData($collection, $data);
-                return true;
-            }
-        }
-        return false;
-    }
-    
-    public function searchRecipes($query) {
-        $recipes = $this->getAll("recipes");
-        $results = [];
-        $searchTerm = strtolower($query);
-        
-        foreach ($recipes as $recipe) {
-            $inTitle = stripos($recipe["title"], $searchTerm) !== false;
-            $inIngredients = stripos($recipe["ingredients"], $searchTerm) !== false;
-            $inInstructions = stripos($recipe["instructions"], $searchTerm) !== false;
-            
-            if ($inTitle || $inIngredients || $inInstructions) {
-                $results[] = $recipe;
-            }
-        }
-        
-        return $results;
-    }
-}
-
-$db = new JsonDatabase();
-?>';
-}
-
-// Función para crear el archivo de autenticación
-function createAuthFile() {
-    return '<?php
-if (session_status() === PHP_SESSION_NONE) { session_start(); }
-
-require_once "includes/db-json.php";
-
-function isLoggedIn() { 
-    return isset($_SESSION["user_id"]); 
-}
-
-function isAdmin() { 
-    return isset($_SESSION["role"]) && $_SESSION["role"] === "admin"; 
-}
-
-function requireLogin() {
-    if (!isLoggedIn()) { 
-        header("Location: login.php"); 
-        exit; 
-    }
-}
-
-function requireAdmin() {
-    requireLogin();
-    if (!isAdmin()) { 
-        header("Location: index.php"); 
-        exit; 
-    }
-}
-
-function getCurrentUser() {
-    if (!isLoggedIn()) return null;
-    return [
-        "id" => $_SESSION["user_id"],
-        "username" => $_SESSION["username"], 
-        "name" => $_SESSION["name"],
-        "role" => $_SESSION["role"]
-    ];
-}
-
-function getUserStats($userId = null) {
-    global $db;
-    
-    if ($userId === null && isset($_SESSION["user_id"])) {
-        $userId = $_SESSION["user_id"];
-    }
-    
-    $recipes = $db->findBy("recipes", "user_id", $userId);
-    $today = date("Y-m-d");
-    
-    $stats = [
-        "total" => count($recipes), 
-        "today" => 0,
-        "this_week" => 0,
-        "with_photos" => 0
-    ];
-    
-    foreach ($recipes as $recipe) {
-        $recipeDate = date("Y-m-d", strtotime($recipe["created_at"]));
-        if ($recipeDate === $today) $stats["today"]++;
-        
-        $weekAgo = date("Y-m-d", strtotime("-7 days"));
-        if (strtotime($recipe["created_at"]) >= strtotime($weekAgo)) {
-            $stats["this_week"]++;
-        }
-        
-        if (!empty($recipe["photo"]) && file_exists($recipe["photo"])) {
-            $stats["with_photos"]++;
-        }
-    }
-    
-    return $stats;
-}
-?>';
-}
-
-// Función para crear el login.php
-function createLoginFile() {
-    return '<?php
-session_start();
-
-if (isset($_SESSION["user_id"])) {
-    header("Location: index.php");
-    exit;
-}
-
-require_once "includes/db-json.php";
-
-$error = "";
-$success = "";
-
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST["login"])) {
-    $username = trim($_POST["username"]);
-    $password = $_POST["password"];
-    
-    if (empty($username) || empty($password)) {
-        $error = "Por favor, completa todos los campos";
-    } else {
-        $user = $db->findOneBy("users", "username", $username);
-        
-        if ($user && password_verify($password, $user["password"])) {
-            if ($user["status"] === "blocked") {
-                $error = "Tu cuenta está bloqueada. Contacta al administrador.";
-            } else {
-                $_SESSION["user_id"] = $user["id"];
-                $_SESSION["username"] = $user["username"];
-                $_SESSION["name"] = $user["name"];
-                $_SESSION["role"] = $user["role"];
-                header("Location: index.php");
-                exit;
-            }
-        } else {
-            $error = "Usuario o contraseña incorrectos";
-        }
-    }
-}
-
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST["register"])) {
-    $username = trim($_POST["reg_username"]);
-    $name = trim($_POST["reg_name"]);
-    $password = $_POST["reg_password"];
-    $confirmPassword = $_POST["reg_confirm_password"];
-    
-    if (empty($username) || empty($name) || empty($password) || empty($confirmPassword)) {
-        $error = "Por favor, completa todos los campos";
-    } elseif (strlen($password) < 6) {
-        $error = "La contraseña debe tener al menos 6 caracteres";
-    } elseif ($password !== $confirmPassword) {
-        $error = "Las contraseñas no coinciden";
-    } else {
-        $existingUser = $db->findOneBy("users", "username", $username);
-        
-        if ($existingUser) {
-            $error = "Este nombre de usuario ya existe";
-        } else {
-            $users = $db->getAll("users");
-            $isFirstUser = count($users) === 0;
-            
-            $newUser = [
-                "username" => $username,
-                "name" => $name,
-                "password" => password_hash($password, PASSWORD_DEFAULT),
-                "role" => $isFirstUser ? "admin" : "user",
-                "status" => "active"
-            ];
-            
-            $db->insert("users", $newUser);
-            $success = "Usuario registrado correctamente. Ahora puedes iniciar sesión.";
-        }
-    }
-}
-?>
-
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Sistema de Recetas</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .container {
-            max-width: 400px;
-            width: 100%;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        .body { padding: 30px; }
-        .form-toggle {
-            display: flex;
-            margin-bottom: 20px;
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 5px;
-        }
-        .toggle-btn {
-            flex: 1;
-            padding: 10px;
-            background: none;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .toggle-btn.active {
-            background: #28a745;
-            color: white;
-        }
-        .form-group { margin-bottom: 20px; }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 500;
-            color: #333;
-        }
-        input {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e9ecef;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        input:focus {
-            border-color: #28a745;
-            outline: none;
-        }
-        .btn {
-            width: 100%;
-            padding: 15px;
-            background: #28a745;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-        .btn:hover { background: #218838; }
-        .error {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .success {
-            background: #d4edda;
-            color: #155724;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .form-container { display: none; }
-        .form-container.active { display: block; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🍳 Sistema de Recetas</h1>
-            <p>Bienvenido a tu recetario digital</p>
-        </div>
-        
-        <div class="body">
-            <div class="form-toggle">
-                <button class="toggle-btn active" onclick="showLogin()">Iniciar Sesión</button>
-                <button class="toggle-btn" onclick="showRegister()">Registrarse</button>
-            </div>
-            
-            <?php if ($error): ?>
-                <div class="error"><?php echo htmlspecialchars($error); ?></div>
-            <?php endif; ?>
-            
-            <?php if ($success): ?>
-                <div class="success"><?php echo htmlspecialchars($success); ?></div>
-            <?php endif; ?>
-            
-            <div id="login-form" class="form-container active">
-                <form method="POST">
-                    <div class="form-group">
-                        <label for="username">Usuario:</label>
-                        <input type="text" id="username" name="username" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="password">Contraseña:</label>
-                        <input type="password" id="password" name="password" required>
-                    </div>
-                    <button type="submit" name="login" class="btn">Iniciar Sesión</button>
-                </form>
-            </div>
-            
-            <div id="register-form" class="form-container">
-                <form method="POST">
-                    <div class="form-group">
-                        <label for="reg_username">Usuario:</label>
-                        <input type="text" id="reg_username" name="reg_username" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="reg_name">Nombre completo:</label>
-                        <input type="text" id="reg_name" name="reg_name" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="reg_password">Contraseña:</label>
-                        <input type="password" id="reg_password" name="reg_password" required minlength="6">
-                    </div>
-                    <div class="form-group">
-                        <label for="reg_confirm_password">Confirmar contraseña:</label>
-                        <input type="password" id="reg_confirm_password" name="reg_confirm_password" required minlength="6">
-                    </div>
-                    <button type="submit" name="register" class="btn">Registrarse</button>
-                </form>
-            </div>
-        </div>
-    </div>
-    
-    <script>
-        function showLogin() {
-            document.getElementById("login-form").classList.add("active");
-            document.getElementById("register-form").classList.remove("active");
-            document.querySelectorAll(".toggle-btn")[0].classList.add("active");
-            document.querySelectorAll(".toggle-btn")[1].classList.remove("active");
-        }
-        
-        function showRegister() {
-            document.getElementById("register-form").classList.add("active");
-            document.getElementById("login-form").classList.remove("active");
-            document.querySelectorAll(".toggle-btn")[1].classList.add("active");
-            document.querySelectorAll(".toggle-btn")[0].classList.remove("active");
-        }
-    </script>
-</body>
-</html>';
-}
-
 if (isset($_POST['install']) || isset($_POST['force_install'])) {
     $results = [];
     $errors = [];
     
-    // Crear directorios
-    $dirs = ['data', 'includes', 'photos', 'css', 'js'];
+    // Crear directorios necesarios
+    $dirs = ['data', 'photos', 'includes'];
     foreach ($dirs as $dir) {
         if (!file_exists($dir)) {
             if (mkdir($dir, 0755, true)) {
@@ -539,27 +70,36 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
         }
     }
     
-    // Archivos a descargar de GitHub
+    // Lista de archivos a descargar desde GitHub
     $githubFiles = [
+        // Archivos principales
         'index.php' => 'index.php',
         'buscar.php' => 'buscar.php',
         'categoria.php' => 'categoria.php',
         'crear-receta.php' => 'crear-receta.php',
+        'editar-receta.php' => 'editar-receta.php',
         'guardar-receta.php' => 'guardar-receta.php',
         'ver-receta.php' => 'ver-receta.php',
-        'test.php' => 'test.php'
+        'login.php' => 'login.php',
+        'logout.php' => 'logout.php',
+        'admin.php' => 'admin.php',
+        '.htaccess' => '.htaccess',
+        
+        // Archivos includes
+        'includes/db-json.php' => 'includes/db-json.php',
+        'includes/auth.php' => 'includes/auth.php'
     ];
     
     // Descargar archivos desde GitHub
     foreach ($githubFiles as $remote => $local) {
         if (downloadFromGitHub($remote, $local)) {
-            $results[] = "✅ Archivo '$local' descargado de GitHub";
+            $results[] = "✅ Archivo '$local' descargado correctamente";
         } else {
-            $errors[] = "❌ Error al descargar '$local' de GitHub";
+            $errors[] = "❌ Error al descargar '$local' - Verifica que el archivo exista en GitHub";
         }
     }
     
-    // Crear archivos JSON
+    // Crear archivos JSON iniciales solo si no existen
     $jsonFiles = [
         'data/users.json' => json_encode(["next_id" => 1, "users" => []], JSON_PRETTY_PRINT),
         'data/recipes.json' => json_encode(["next_id" => 1, "recipes" => []], JSON_PRETTY_PRINT),
@@ -578,51 +118,26 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
     ];
     
     foreach ($jsonFiles as $file => $content) {
-        if (file_put_contents($file, $content) !== false) {
-            $results[] = "✅ Archivo '$file' creado";
+        if (!file_exists($file)) {
+            if (file_put_contents($file, $content) !== false) {
+                $results[] = "✅ Base de datos '$file' creada";
+            } else {
+                $errors[] = "❌ Error al crear '$file'";
+            }
         } else {
-            $errors[] = "❌ Error al crear '$file'";
+            $results[] = "⚠️ Base de datos '$file' ya existe (no se sobrescribió)";
         }
     }
     
-    // Crear archivos PHP del sistema
-    $systemFiles = [
-        'includes/db-json.php' => createJsonConfig(),
-        'includes/auth.php' => createAuthFile(),
-        'login.php' => createLoginFile(),
-        'logout.php' => '<?php
-session_start();
-$_SESSION = array();
-if (ini_get("session.use_cookies")) {
-    $params = session_get_cookie_params();
-    setcookie(session_name(), "", time() - 42000, $params["path"], $params["domain"], $params["secure"], $params["httponly"]);
-}
-session_destroy();
-header("Location: login.php");
-exit;
-?>',
-        '.htaccess' => 'DirectoryIndex index.php
-<FilesMatch "\.(json)$">
-    Order Allow,Deny
-    Deny from all
-</FilesMatch>
-Options -Indexes
-RewriteEngine On
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
-    ];
-    
-    foreach ($systemFiles as $file => $content) {
-        if (file_put_contents($file, $content) !== false) {
-            $results[] = "✅ Archivo '$file' creado";
-        } else {
-            $errors[] = "❌ Error al crear '$file'";
-        }
+    // Verificar permisos de escritura
+    if (is_writable('data') && is_writable('photos')) {
+        $results[] = "✅ Permisos de escritura verificados";
+    } else {
+        $errors[] = "❌ Error de permisos - Las carpetas 'data' y 'photos' deben tener permisos de escritura";
     }
     
-    // Marcar como instalado
-    if (count($errors) == 0) {
+    // Marcar como instalado si no hay errores críticos
+    if (count($errors) == 0 || (count($errors) < 3 && count($results) > 10)) {
         file_put_contents('.installed', date('Y-m-d H:i:s'));
     }
 }
@@ -633,7 +148,7 @@ RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instalador Automático - Sistema de Recetas</title>
+    <title>Instalador - Sistema de Recetas JSON</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -679,24 +194,13 @@ RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
         }
         .success { background: #d4edda; color: #155724; }
         .error { background: #f8d7da; color: #721c24; }
+        .warning { background: #fff3cd; color: #856404; }
         .info {
             background: #d1ecf1;
             color: #0c5460;
             padding: 20px;
             border-radius: 10px;
             margin: 20px 0;
-        }
-        .file-list {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 10px;
-            margin: 20px 0;
-        }
-        .file-item {
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 5px;
-            font-size: 14px;
         }
         .features {
             display: grid;
@@ -719,41 +223,67 @@ RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
             text-align: center;
             font-weight: bold;
         }
+        .file-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .file-item {
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .requirements {
+            background: #fff3cd;
+            color: #856404;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .requirements ul {
+            margin-left: 20px;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🍳 Instalador Automático del Sistema de Recetas</h1>
-            <p>¡Instalación completa con descarga desde GitHub!</p>
+            <h1>🍳 Instalador del Sistema de Recetas</h1>
+            <p>Instalación automática desde GitHub</p>
         </div>
 
         <div class="body">
             <?php if (!isset($_POST['install']) && !isset($_POST['force_install'])): ?>
                 
                 <div class="highlight">
-                    🎉 ¡INSTALADOR AUTOMÁTICO COMPLETO!<br>
-                    Descarga los archivos desde GitHub y configura todo automáticamente
+                    🎉 Sistema de Recetas con Base de Datos JSON<br>
+                    ¡Sin necesidad de MySQL!
                 </div>
                 
-                <h2>Sistema de Recetas con Base de Datos JSON</h2>
-                <p>Este instalador descargará y configurará automáticamente todo el sistema de recetas, migrando de SQL a JSON.</p>
+                <h2>Bienvenido al Instalador</h2>
+                <p>Este instalador descargará y configurará automáticamente el sistema de recetas desde GitHub.</p>
+                
+                <div class="requirements">
+                    <h3>⚠️ Requisitos del Sistema:</h3>
+                    <ul>
+                        <li>PHP 7.0 o superior</li>
+                        <li>Función <code>file_get_contents()</code> habilitada</li>
+                        <li>Permisos de escritura en el directorio actual</li>
+                        <li>Conexión a Internet para descargar archivos</li>
+                    </ul>
+                </div>
                 
                 <div class="info">
-                    <h3>📋 Se instalarán automáticamente:</h3>
+                    <h3>📋 ¿Qué hará el instalador?</h3>
                     <div class="file-list">
-                        <div class="file-item">📄 login.php - Sistema de autenticación</div>
-                        <div class="file-item">📄 index.php - Página principal</div>
-                        <div class="file-item">📄 buscar.php - Búsqueda de recetas</div>
-                        <div class="file-item">📄 categoria.php - Gestión de categorías</div>
-                        <div class="file-item">📄 crear-receta.php - Crear recetas</div>
-                        <div class="file-item">📄 ver-receta.php - Ver recetas</div>
-                        <div class="file-item">📄 guardar-receta.php - Guardar recetas</div>
-                        <div class="file-item">📄 includes/db-json.php - Base de datos JSON</div>
-                        <div class="file-item">📄 includes/auth.php - Autenticación</div>
-                        <div class="file-item">📄 .htaccess - Configuración</div>
-                        <div class="file-item">📁 data/ - Base de datos JSON</div>
-                        <div class="file-item">📁 photos/ - Imágenes de recetas</div>
+                        <div class="file-item">✅ Crear directorios necesarios</div>
+                        <div class="file-item">✅ Descargar archivos desde GitHub</div>
+                        <div class="file-item">✅ Crear base de datos JSON</div>
+                        <div class="file-item">✅ Configurar permisos</div>
+                        <div class="file-item">✅ Verificar la instalación</div>
                     </div>
                 </div>
                 
@@ -762,44 +292,35 @@ RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
                     <div class="features">
                         <div class="feature">
                             <h4>🔐 Sistema de Usuarios</h4>
-                            <p>Login, registro, roles y permisos</p>
+                            <p>Login, registro y roles</p>
                         </div>
                         <div class="feature">
                             <h4>📝 Gestión de Recetas</h4>
-                            <p>Crear, editar, buscar y categorizar</p>
-                        </div>
-                        <div class="feature">
-                            <h4>🗂️ Base de Datos JSON</h4>
-                            <p>Sin necesidad de MySQL</p>
-                        </div>
-                        <div class="feature">
-                            <h4>📷 Gestión de Imágenes</h4>
-                            <p>Subida de fotos para cada receta</p>
+                            <p>Crear, editar y eliminar</p>
                         </div>
                         <div class="feature">
                             <h4>🔍 Búsqueda Avanzada</h4>
-                            <p>Por título, ingredientes o categoría</p>
+                            <p>Por nombre e ingredientes</p>
+                        </div>
+                        <div class="feature">
+                            <h4>📷 Subida de Imágenes</h4>
+                            <p>Fotos para cada receta</p>
                         </div>
                         <div class="feature">
                             <h4>📱 Diseño Responsive</h4>
-                            <p>Optimizado para todos los dispositivos</p>
+                            <p>Adaptado a todos los dispositivos</p>
+                        </div>
+                        <div class="feature">
+                            <h4>👑 Panel Admin</h4>
+                            <p>Control total del sistema</p>
                         </div>
                     </div>
-                </div>
-                
-                <div class="info">
-                    <h3>⚠️ Requisitos:</h3>
-                    <ul style="margin-left: 20px;">
-                        <li>PHP 7.0 o superior</li>
-                        <li>Permisos de escritura en el directorio</li>
-                        <li>Conexión a Internet para descargar archivos de GitHub</li>
-                    </ul>
                 </div>
                 
                 <div style="text-align: center;">
                     <form method="POST">
                         <button type="submit" name="install" class="btn">
-                            🚀 Instalar Sistema de Recetas Ahora
+                            🚀 Instalar Sistema de Recetas
                         </button>
                     </form>
                     <p style="margin-top: 15px; color: #6c757d;">
@@ -808,7 +329,7 @@ RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
                 </div>
                 
             <?php else: ?>
-                <h2>Resultados de la Instalación</h2>
+                <h2>Proceso de Instalación</h2>
                 
                 <?php foreach ($results as $result): ?>
                     <div class="result success"><?php echo $result; ?></div>
@@ -820,25 +341,24 @@ RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
                 
                 <?php if (count($errors) == 0): ?>
                     <div class="info">
-                        <h3>🎉 ¡Instalación Completa Exitosa!</h3>
-                        <p>El sistema de recetas se ha instalado correctamente con todas las funcionalidades.</p>
+                        <h3>🎉 ¡Instalación Completada con Éxito!</h3>
+                        <p>El sistema de recetas se ha instalado correctamente.</p>
                         
-                        <h4>✅ Sistema 100% Funcional:</h4>
+                        <h4>✅ Componentes instalados:</h4>
                         <ul style="margin: 15px 0; padding-left: 20px;">
-                            <li>✅ Sistema de autenticación completo</li>
-                            <li>✅ Base de datos JSON configurada</li>
-                            <li>✅ Archivos descargados desde GitHub</li>
-                            <li>✅ Gestión completa de recetas</li>
-                            <li>✅ Sistema de categorías</li>
-                            <li>✅ Búsqueda avanzada</li>
-                            <li>✅ Subida de imágenes</li>
+                            <li>Sistema de autenticación</li>
+                            <li>Base de datos JSON</li>
+                            <li>Gestión de recetas</li>
+                            <li>Sistema de categorías</li>
+                            <li>Búsqueda avanzada</li>
+                            <li>Panel de administración</li>
                         </ul>
                         
                         <h4>🎯 Siguientes pasos:</h4>
                         <ol style="margin: 15px 0; padding-left: 20px;">
-                            <li><strong>Accede al sistema</strong> haciendo clic en el botón de abajo</li>
-                            <li><strong>Regístrate</strong> - El primer usuario será automáticamente administrador</li>
-                            <li><strong>¡Comienza a crear recetas!</strong></li>
+                            <li>Haz clic en el botón de abajo para acceder al sistema</li>
+                            <li>Regístrate como primer usuario (serás administrador)</li>
+                            <li>¡Comienza a crear tus recetas!</li>
                         </ol>
                     </div>
                     
@@ -847,19 +367,34 @@ RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]'
                             🍳 Acceder al Sistema de Recetas
                         </a>
                         
-                        <p style="margin-top: 20px; color: #6c757d;">
-                            <small>🗑️ Puedes eliminar este archivo instalador después de acceder al sistema</small>
+                        <p style="margin-top: 20px; color: #dc3545;">
+                            <strong>⚠️ Importante:</strong> Por seguridad, elimina este archivo instalador
                         </p>
                     </div>
                     
+                <?php elseif (count($errors) < 3 && count($results) > 10): ?>
+                    <div class="info">
+                        <h3>⚠️ Instalación Completada con Advertencias</h3>
+                        <p>El sistema se instaló pero algunos componentes opcionales no se pudieron configurar.</p>
+                        <p>El sistema debería funcionar correctamente.</p>
+                        
+                        <div style="text-align: center; margin-top: 20px;">
+                            <a href="login.php" class="btn btn-primary">
+                                🍳 Acceder al Sistema de Recetas
+                            </a>
+                        </div>
+                    </div>
                 <?php else: ?>
                     <div class="info">
-                        <h3>⚠️ Instalación Incompleta</h3>
-                        <p>Se produjeron algunos errores. Verifica:</p>
+                        <h3>❌ Instalación Fallida</h3>
+                        <p>Se produjeron errores críticos durante la instalación.</p>
+                        
+                        <h4>Posibles soluciones:</h4>
                         <ul style="margin-left: 20px;">
-                            <li>Permisos de escritura en el directorio</li>
-                            <li>Conexión a Internet para descargar de GitHub</li>
-                            <li>Versión de PHP (requiere 7.0+)</li>
+                            <li>Verifica que tienes permisos de escritura en el directorio</li>
+                            <li>Asegúrate de que PHP puede acceder a URLs externas</li>
+                            <li>Comprueba que el repositorio de GitHub esté accesible</li>
+                            <li>Verifica que todos los archivos estén en el repositorio</li>
                         </ul>
                         
                         <div style="text-align: center; margin-top: 20px;">
