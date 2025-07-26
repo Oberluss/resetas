@@ -1,0 +1,10 @@
+DirectoryIndex index.php
+<FilesMatch "\.(json)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+Options -Indexes
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^receta/([0-9]+)/?$ ver-receta.php?id=$1 [L,QSA]
