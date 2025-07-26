@@ -4,6 +4,17 @@
  * Funciona tanto con repositorio actualizado como sin actualizar
  */
 
+// Manejar eliminación del instalador
+if (isset($_POST['delete_installer'])) {
+    $currentFile = basename(__FILE__);
+    if (unlink($currentFile)) {
+        header("Location: login.php?installer_deleted=true");
+        exit;
+    } else {
+        die("No se pudo eliminar el instalador. Por favor, elimínalo manualmente.");
+    }
+}
+
 // Verificar si ya está instalado
 if (file_exists('.installed') && !isset($_POST['force_install'])) {
     ?>
@@ -647,6 +658,12 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
                         <a href="login.php" class="btn btn-primary">
                             🍳 Acceder al Sistema de Recetas
                         </a>
+                        
+                        <form method="POST" style="display: inline-block; margin-left: 10px;">
+                            <button type="submit" name="delete_installer" class="btn btn-danger">
+                                🗑️ Eliminar Instalador
+                            </button>
+                        </form>
                         
                         <p style="margin-top: 20px; color: #dc3545;">
                             <strong>⚠️ Importante:</strong> Por seguridad, elimina este archivo instalador
