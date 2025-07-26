@@ -1,8 +1,7 @@
-
 <?php
 /**
- * INSTALADOR AUTOMÁTICO - Sistema de Recetas JSON
- * Versión actualizada para repositorio con archivos ya modificados
+ * INSTALADOR HÍBRIDO - Sistema de Recetas JSON
+ * Funciona tanto con repositorio actualizado como sin actualizar
  */
 
 // Verificar si ya está instalado
@@ -53,6 +52,219 @@ function downloadFromGitHub($file, $localPath) {
     return file_put_contents($localPath, $content);
 }
 
+// Función para crear el archivo db-json.php
+function createDbJsonFile() {
+    return '<?php
+class JsonDatabase {
+    private $dataPath;
+    private $files = [
+        "users" => "users.json",
+        "recipes" => "recipes.json",
+        "categories" => "categories.json"
+    ];
+    
+    public function __construct() {
+        $this->dataPath = dirname(__DIR__) . "/data/";
+        $this->ensureDataDirectory();
+    }
+    
+    private function ensureDataDirectory() {
+        if (!file_exists($this->dataPath)) {
+            mkdir($this->dataPath, 0777, true);
+        }
+    }
+    
+    private function getFilePath($collection) {
+        return $this->dataPath . $this->files[$collection];
+    }
+    
+    private function readData($collection) {
+        $filePath = $this->getFilePath($collection);
+        
+        if (!file_exists($filePath)) {
+            return ["next_id" => 1, $collection => []];
+        }
+        
+        $json = file_get_contents($filePath);
+        return json_decode($json, true);
+    }
+    
+    private function writeData($collection, $data) {
+        $filePath = $this->getFilePath($collection);
+        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        return file_put_contents($filePath, $json);
+    }
+    
+    public function getAll($collection) {
+        $data = $this->readData($collection);
+        return $data[$collection] ?? [];
+    }
+    
+    public function getById($collection, $id) {
+        $items = $this->getAll($collection);
+        foreach ($items as $item) {
+            if ($item["id"] == $id) {
+                return $item;
+            }
+        }
+        return null;
+    }
+    
+    public function findBy($collection, $field, $value) {
+        $items = $this->getAll($collection);
+        $results = [];
+        foreach ($items as $item) {
+            if (isset($item[$field]) && $item[$field] == $value) {
+                $results[] = $item;
+            }
+        }
+        return $results;
+    }
+    
+    public function findOneBy($collection, $field, $value) {
+        $results = $this->findBy($collection, $field, $value);
+        return !empty($results) ? $results[0] : null;
+    }
+    
+    public function insert($collection, $item) {
+        $data = $this->readData($collection);
+        $item["id"] = $data["next_id"];
+        $item["created_at"] = date("Y-m-d H:i:s");
+        $data[$collection][] = $item;
+        $data["next_id"]++;
+        $this->writeData($collection, $data);
+        return $item;
+    }
+    
+    public function update($collection, $id, $updates) {
+        $data = $this->readData($collection);
+        $items = &$data[$collection];
+        
+        foreach ($items as &$item) {
+            if ($item["id"] == $id) {
+                $item = array_merge($item, $updates);
+                $item["updated_at"] = date("Y-m-d H:i:s");
+                $this->writeData($collection, $data);
+                return $item;
+            }
+        }
+        return null;
+    }
+    
+    public function delete($collection, $id) {
+        $data = $this->readData($collection);
+        $items = &$data[$collection];
+        
+        foreach ($items as $key => $item) {
+            if ($item["id"] == $id) {
+                unset($items[$key]);
+                $data[$collection] = array_values($items);
+                $this->writeData($collection, $data);
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    public function searchRecipes($query) {
+        $recipes = $this->getAll("recipes");
+        $results = [];
+        $searchTerm = strtolower($query);
+        
+        foreach ($recipes as $recipe) {
+            $inTitle = stripos($recipe["title"], $searchTerm) !== false;
+            $inIngredients = stripos($recipe["ingredients"], $searchTerm) !== false;
+            $inInstructions = stripos($recipe["instructions"], $searchTerm) !== false;
+            
+            if ($inTitle || $inIngredients || $inInstructions) {
+                $results[] = $recipe;
+            }
+        }
+        
+        return $results;
+    }
+}
+
+$db = new JsonDatabase();
+?>';
+}
+
+// Función para crear el archivo auth.php
+function createAuthFile() {
+    return '<?php
+if (session_status() === PHP_SESSION_NONE) { session_start(); }
+
+require_once "db-json.php";
+
+function isLoggedIn() { 
+    return isset($_SESSION["user_id"]); 
+}
+
+function isAdmin() { 
+    return isset($_SESSION["role"]) && $_SESSION["role"] === "admin"; 
+}
+
+function requireLogin() {
+    if (!isLoggedIn()) { 
+        header("Location: login.php"); 
+        exit; 
+    }
+}
+
+function requireAdmin() {
+    requireLogin();
+    if (!isAdmin()) { 
+        header("Location: index.php"); 
+        exit; 
+    }
+}
+
+function getCurrentUser() {
+    if (!isLoggedIn()) return null;
+    return [
+        "id" => $_SESSION["user_id"],
+        "username" => $_SESSION["username"], 
+        "name" => $_SESSION["name"],
+        "role" => $_SESSION["role"]
+    ];
+}
+
+function getUserStats($userId = null) {
+    global $db;
+    
+    if ($userId === null && isset($_SESSION["user_id"])) {
+        $userId = $_SESSION["user_id"];
+    }
+    
+    $recipes = $db->findBy("recipes", "user_id", $userId);
+    $today = date("Y-m-d");
+    
+    $stats = [
+        "total" => count($recipes), 
+        "today" => 0,
+        "this_week" => 0,
+        "with_photos" => 0
+    ];
+    
+    foreach ($recipes as $recipe) {
+        $recipeDate = date("Y-m-d", strtotime($recipe["created_at"]));
+        if ($recipeDate === $today) $stats["today"]++;
+        
+        $weekAgo = date("Y-m-d", strtotime("-7 days"));
+        if (strtotime($recipe["created_at"]) >= strtotime($weekAgo)) {
+            $stats["this_week"]++;
+        }
+        
+        if (!empty($recipe["photo"]) && file_exists($recipe["photo"])) {
+            $stats["with_photos"]++;
+        }
+    }
+    
+    return $stats;
+}
+?>';
+}
+
 if (isset($_POST['install']) || isset($_POST['force_install'])) {
     $results = [];
     $errors = [];
@@ -91,12 +303,29 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
         'includes/auth.php' => 'includes/auth.php'
     ];
     
-    // Descargar archivos desde GitHub
+    // Archivos críticos que deben existir
+    $criticalFiles = [
+        'includes/db-json.php' => createDbJsonFile(),
+        'includes/auth.php' => createAuthFile()
+    ];
+    
+    // Intentar descargar archivos desde GitHub
     foreach ($githubFiles as $remote => $local) {
-        if (downloadFromGitHub($remote, $local)) {
+        $downloaded = downloadFromGitHub($remote, $local);
+        
+        if ($downloaded) {
             $results[] = "✅ Archivo '$local' descargado correctamente";
         } else {
-            $errors[] = "❌ Error al descargar '$local' - Verifica que el archivo exista en GitHub";
+            // Si es un archivo crítico, crearlo localmente
+            if (isset($criticalFiles[$local])) {
+                if (file_put_contents($local, $criticalFiles[$local]) !== false) {
+                    $results[] = "✅ Archivo '$local' creado localmente (no estaba en GitHub)";
+                } else {
+                    $errors[] = "❌ Error al crear archivo crítico '$local'";
+                }
+            } else {
+                $results[] = "⚠️ Archivo '$local' no encontrado en GitHub (opcional)";
+            }
         }
     }
     
@@ -137,8 +366,25 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
         $errors[] = "❌ Error de permisos - Las carpetas 'data' y 'photos' deben tener permisos de escritura";
     }
     
+    // Verificar archivos críticos
+    $criticalCheck = true;
+    foreach (array_keys($criticalFiles) as $file) {
+        if (!file_exists($file)) {
+            $criticalCheck = false;
+            $errors[] = "❌ Archivo crítico faltante: $file";
+        }
+    }
+    
+    if ($criticalCheck) {
+        $results[] = "✅ Todos los archivos críticos están presentes";
+    }
+    
     // Marcar como instalado si no hay errores críticos
-    if (count($errors) == 0 || (count($errors) < 3 && count($results) > 10)) {
+    $criticalErrorCount = count(array_filter($errors, function($error) {
+        return strpos($error, 'crítico') !== false;
+    }));
+    
+    if ($criticalErrorCount == 0) {
         file_put_contents('.installed', date('Y-m-d H:i:s'));
     }
 }
@@ -192,6 +438,7 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
             padding: 10px;
             margin: 5px 0;
             border-radius: 5px;
+            font-size: 14px;
         }
         .success { background: #d4edda; color: #155724; }
         .error { background: #f8d7da; color: #721c24; }
@@ -247,13 +494,22 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
             margin-left: 20px;
             margin-top: 10px;
         }
+        .results-summary {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .results-summary h4 {
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🍳 Instalador del Sistema de Recetas</h1>
-            <p>Instalación automática desde GitHub</p>
+            <p>Instalación automática con base de datos JSON</p>
         </div>
 
         <div class="body">
@@ -265,15 +521,15 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
                 </div>
                 
                 <h2>Bienvenido al Instalador</h2>
-                <p>Este instalador descargará y configurará automáticamente el sistema de recetas desde GitHub.</p>
+                <p>Este instalador configurará automáticamente el sistema de recetas en tu servidor.</p>
                 
                 <div class="requirements">
                     <h3>⚠️ Requisitos del Sistema:</h3>
                     <ul>
                         <li>PHP 7.0 o superior</li>
-                        <li>Función <code>file_get_contents()</code> habilitada</li>
                         <li>Permisos de escritura en el directorio actual</li>
-                        <li>Conexión a Internet para descargar archivos</li>
+                        <li>Función <code>file_get_contents()</code> habilitada (opcional)</li>
+                        <li>Conexión a Internet (opcional, para descargar de GitHub)</li>
                     </ul>
                 </div>
                 
@@ -281,9 +537,9 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
                     <h3>📋 ¿Qué hará el instalador?</h3>
                     <div class="file-list">
                         <div class="file-item">✅ Crear directorios necesarios</div>
-                        <div class="file-item">✅ Descargar archivos desde GitHub</div>
-                        <div class="file-item">✅ Crear base de datos JSON</div>
-                        <div class="file-item">✅ Configurar permisos</div>
+                        <div class="file-item">✅ Descargar o crear archivos</div>
+                        <div class="file-item">✅ Configurar base de datos JSON</div>
+                        <div class="file-item">✅ Establecer permisos</div>
                         <div class="file-item">✅ Verificar la instalación</div>
                     </div>
                 </div>
@@ -309,7 +565,7 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
                         </div>
                         <div class="feature">
                             <h4>📱 Diseño Responsive</h4>
-                            <p>Adaptado a todos los dispositivos</p>
+                            <p>Para todos los dispositivos</p>
                         </div>
                         <div class="feature">
                             <h4>👑 Panel Admin</h4>
@@ -325,25 +581,49 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
                         </button>
                     </form>
                     <p style="margin-top: 15px; color: #6c757d;">
-                        <small>La instalación descargará los archivos desde GitHub</small>
+                        <small>El instalador es inteligente: descargará de GitHub si es posible,<br>
+                        o creará los archivos localmente si es necesario</small>
                     </p>
                 </div>
                 
             <?php else: ?>
                 <h2>Proceso de Instalación</h2>
                 
+                <div class="results-summary">
+                    <h4>📊 Resumen de la instalación:</h4>
+                    <p>✅ Acciones exitosas: <?php echo count($results); ?></p>
+                    <?php if (count($errors) > 0): ?>
+                        <p>❌ Errores encontrados: <?php echo count($errors); ?></p>
+                    <?php endif; ?>
+                </div>
+                
                 <?php foreach ($results as $result): ?>
-                    <div class="result success"><?php echo $result; ?></div>
+                    <div class="result <?php 
+                        if (strpos($result, '✅') !== false) echo 'success';
+                        elseif (strpos($result, '⚠️') !== false) echo 'warning';
+                        else echo 'success';
+                    ?>"><?php echo $result; ?></div>
                 <?php endforeach; ?>
                 
                 <?php foreach ($errors as $error): ?>
                     <div class="result error"><?php echo $error; ?></div>
                 <?php endforeach; ?>
                 
-                <?php if (count($errors) == 0): ?>
+                <?php 
+                $criticalErrorCount = count(array_filter($errors, function($error) {
+                    return strpos($error, 'crítico') !== false;
+                }));
+                
+                if ($criticalErrorCount == 0): 
+                ?>
                     <div class="info">
-                        <h3>🎉 ¡Instalación Completada con Éxito!</h3>
+                        <h3>🎉 ¡Instalación Completada!</h3>
                         <p>El sistema de recetas se ha instalado correctamente.</p>
+                        
+                        <?php if (count($errors) > 0): ?>
+                            <p><strong>Nota:</strong> Algunos componentes opcionales no se pudieron configurar, 
+                            pero el sistema funcionará correctamente.</p>
+                        <?php endif; ?>
                         
                         <h4>✅ Componentes instalados:</h4>
                         <ul style="margin: 15px 0; padding-left: 20px;">
@@ -373,29 +653,25 @@ if (isset($_POST['install']) || isset($_POST['force_install'])) {
                         </p>
                     </div>
                     
-                <?php elseif (count($errors) < 3 && count($results) > 10): ?>
-                    <div class="info">
-                        <h3>⚠️ Instalación Completada con Advertencias</h3>
-                        <p>El sistema se instaló pero algunos componentes opcionales no se pudieron configurar.</p>
-                        <p>El sistema debería funcionar correctamente.</p>
-                        
-                        <div style="text-align: center; margin-top: 20px;">
-                            <a href="login.php" class="btn btn-primary">
-                                🍳 Acceder al Sistema de Recetas
-                            </a>
-                        </div>
-                    </div>
                 <?php else: ?>
                     <div class="info">
                         <h3>❌ Instalación Fallida</h3>
                         <p>Se produjeron errores críticos durante la instalación.</p>
                         
+                        <h4>Errores críticos detectados:</h4>
+                        <ul style="margin-left: 20px; color: #dc3545;">
+                            <?php foreach ($errors as $error): ?>
+                                <?php if (strpos($error, 'crítico') !== false): ?>
+                                    <li><?php echo $error; ?></li>
+                                <?php endif; ?>
+                            <?php endforeach; ?>
+                        </ul>
+                        
                         <h4>Posibles soluciones:</h4>
                         <ul style="margin-left: 20px;">
                             <li>Verifica que tienes permisos de escritura en el directorio</li>
-                            <li>Asegúrate de que PHP puede acceder a URLs externas</li>
-                            <li>Comprueba que el repositorio de GitHub esté accesible</li>
-                            <li>Verifica que todos los archivos estén en el repositorio</li>
+                            <li>Asegúrate de que PHP 7.0 o superior esté instalado</li>
+                            <li>Comprueba que las carpetas se puedan crear</li>
                         </ul>
                         
                         <div style="text-align: center; margin-top: 20px;">
